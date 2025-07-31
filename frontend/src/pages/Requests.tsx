@@ -7,28 +7,19 @@ import { requestClient, signClient, otpClient } from "../store";
 import { useNavigate } from "react-router";
 import { useAppStore } from "../store";
 import socket from "../client/socket";
+import { fetchRequestData } from "../utils/requests/fetchrequestData"
 import OfficerSelectionModal from "../modals/OfficerSelectionModal";
 import SignatureModal1 from "../modals/signatureModal";
 import { handleSignClick } from "../utils/modalFunctions";
 import RejectionFormModal from "../modals/rejectionModal";
 import DelegateModal from "../modals/delegationModal";
 import RequestsDrawer from "../drawer/requestsDrawer";
-import {
-  Button,
-  Drawer,
-  Form,
-  Input,
-  Upload,
-  Select,
-  Tag,
-  Spin,
-  message,
-  Dropdown,
-  Menu,
-  Modal,
-  Image,
-} from "antd";
-import { record } from "zod";
+import { getColumns } from "../hooks/columns";
+import { getOfficersList } from "../utils/requests/getOfficers";
+import { handleOfficerSelection as handleOfficerSelectionUtil } from "../utils/requests/fetchOfficers";
+import {Button,Form,Input,Spin,message,Modal,} from "antd";
+import { addNewRequest } from "../utils/requests/addNewRequest";
+import { fetchUploadedSignaturesUtil } from "../utils/requests/fetchUploadedSign";
 
 interface RequestItem {
   id: string;
@@ -55,16 +46,12 @@ const Requests: React.FC = () => {
   const [search, setSearch] = useState("");
   const getSession = useAppStore().init;
   const session = useAppStore().session?.userId;
-  const userRole = useAppStore().session?.role;
+  const userRole = useAppStore().session?.role ?? 0;
   const [isDelegateModalOpen, setIsDelegateModalOpen] = useState(false);
   const [delegateReason, setDelegateReason] = useState("");
-  const [delegationRecord, setDelegationRecord] = useState<RequestItem | null>(
-    null
-  );
+  const [delegationRecord, setDelegationRecord] = useState<RequestItem | null>(null);
   const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
-  const [signatureImages, setSignatureImages] = useState<
-    { id: string; url: string }[]
-  >([]);
+  const [signatureImages, setSignatureImages] = useState<{ id: string; url: string }[]>([]);
   const [selectedImage, setSelectedImage] = useState<{
     id: string;
     url: string;
@@ -82,33 +69,13 @@ const Requests: React.FC = () => {
     setIsDrawerOpen(true);
   };
 
-  const handleDelete = async (id: string) => {
-    try {
-      const res = await requestClient.deleteWholeTemplate(id);
-      if (res) {
-        await fetchRequest();
-        message.success("Request deleted successfully");
-      }
-    } catch (err) {
-      console.log("Error deleting request", err);
-      message.error("Enable to delete");
-    }
-  };
-  const handleAddNewRequest = async () => {
-    try {
-      const values = await form.validateFields();
-      setLoading(true);
-      await requestClient.uploadFormData(values);
-      message.success("Request submitted successfully");
-      form.resetFields();
-      setIsDrawerOpen(false);
-      await fetchRequest();
-    } catch (error) {
-      message.error("Failed to submit request");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const handleAddNewRequest = () =>
+  addNewRequest({
+    form,
+    setLoading,
+    fetchRequest,
+    closeDrawer: () => setIsDrawerOpen(false),
+  });
   const handleSend = async (record: any) => {
     const hasData = record.data.length;
     try {
@@ -125,24 +92,16 @@ const Requests: React.FC = () => {
   };
 
   const handleOfficerSelection = async () => {
-    if (!selectedOfficer || !selectedRequest) {
-      message.error("Please select an officer.");
-      return;
-    }
-    try {
-      await requestClient.sendRequestToOfficer({
-        recordId: selectedRequest.id,
-        officerId: selectedOfficer,
-      });
-      message.success("Request sent for signature");
+  await handleOfficerSelectionUtil({
+    selectedOfficer,
+    selectedRequest,
+    onSuccess: () => {
       setIsModalOpen(false);
       setSelectedRequest(null);
       setSelectedOfficer(null);
-    } catch (err) {
-      console.error("Error sending request:", err);
-      message.error("Failed to send request");
-    }
-  };
+    },
+  });
+};
 
   const handleDelegate = (record: any) => {
     setDelegationRecord(record);
@@ -152,223 +111,35 @@ const Requests: React.FC = () => {
     setRejectionRecord(record);
     setIsRejectionModalOpen(true);
   };
-  const columns = [
-    {
-      title: "Request",
-      dataIndex: "templateName",
-      key: "name",
-      render: (count: any[], record: any) => (
-        <Button
-          type="link"
-          onClick={async () => {
-            await requestClient.previewDocs(record.id);
-          }}
-        >
-          {record.templateName}
-        </Button>
-      ),
-    },
-    {
-      title: "No. of Document",
-      dataIndex: "data",
-      key: "NoOfDocument",
-      render: (count: any[], record: any) => (
-        <Button
-          type="link"
-          onClick={() => {
-            navigate(`/dashboard/request/${record.id}`);
-          }}
-        >
-          {count.length || 0}
-        </Button>
-      ),
-    },
-    {
-      title: "Rejected Document",
-      dataIndex: "rejectValue",
-      key: "RejectedDocument",
-      render: (count: number, record: any) => {
-        // console.log("data in rejectedCount =>", record.data);
-        const rejectValue =
-          record.data?.filter((d: any) => d.signStatus == 2)?.length || 0;
-        return (
-          <Button
-            type="link"
-            onClick={() => {
-              navigate(`/dashboard/request/rejected/${record.id}`);
-            }}
-          >
-            {rejectValue}
-          </Button>
-        );
-      },
-    },
-    {
-      title: "Created At",
-      dataIndex: "createdAt",
-      key: "CreatedAt",
-      sorter: (a: any, b: any) =>
-        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-      render: (createdAt: string) => {
-        const date = new Date(createdAt);
-        return `${date.getDate().toString().padStart(2, "0")}-${(date.getMonth() + 1).toString().padStart(2, "0")}-${date.getFullYear()}`;
-      },
-    },
-    {
-      title: "Status",
-      dataIndex: "signStatus",
-      key: "signStatus",
-      render: (_: any, record: any) => {
-        const statusMap: any = {
-          0: { label: "Unsigned", color: "orange" },
-          1: { label: "Ready for Sign", color: "pink" },
-          2: { label: "Rejected", color: "red" },
-          3: { label: "Delegated", color: "blue" },
-          4: { label: "In Progress", color: "purple" },
-          5: { label: "Signed", color: "green" },
-          6: { label: "Ready for Dispatch", color: "cyan" },
-          7: { label: "Dispatched", color: "gray" },
-          default: { label: "Unknown", color: "black" },
-        };
-        let signstatusValue = record.signStatus;
-        const { label, color } =
-          statusMap[signstatusValue] || statusMap.default;
-
-        return (
-          <Tag color={color}>{label}</Tag>
-        );
-      },
-    },
-    {
-      title: "Actions",
-      key: "actions",
-      render: (_: any, record: any) => {
-        const handleMenuClick = ({ key }: any) => {
-          if (key === "clone") {
-            requestClient
-              .cloneFormData(record._id)
-              .then(() => {
-                message.success("Request cloned successfully");
-                fetchRequest();
-              })
-              .catch(() => {
-                message.error("Failed to clone request");
-              });
-          } else if (key === "send") {
-            handleSend(record);
-          } else if (key === "delete") {
-            handleDelete(record._id);
-          } else if (key === "sign") {
-            fetchUploadedSignatures(record);
-            setIsSignatureModalOpen(true);
-          } else if (key === "delegate") {
-            handleDelegate(record);
-          } else if (key === "reject") {
-            handleReject(record);
-          }
-        };
-
-        const menu = (
-          <Menu onClick={handleMenuClick}>
-            <Menu.Item key="clone">Clone</Menu.Item>
-            {record.signStatus == 0 && (
-              <Menu.Item key="send">Send for Signature</Menu.Item>
-            )}
-            {userRole == 2 && record.signStatus == 1 && (
-              <Menu.Item key="delegate">Delegate for Signature</Menu.Item>
-            )}
-            {userRole == 3 && record.signStatus == 0 && (
-              <Menu.Item key="delete">Delete</Menu.Item>
-            )}
-            {((userRole == 2 && record.signStatus == 1) ||
-              (userRole == 3 && record.signStatus == 3)) && (
-                <Menu.Item key="sign">Sign</Menu.Item>
-              )}
-            {userRole == 2 && record.signStatus == 1 && (
-              <Menu.Item key="reject">Reject</Menu.Item>
-            )}
-          </Menu>
-        );
-
-        return (
-          <Dropdown overlay={menu} trigger={["click"]}>
-            {record.signStatus !== 2 ? (
-              <Button>
-                Actions <DownOutlined />
-              </Button>
-            ) : record.signStatus !== 2 ? (
-              <Dropdown overlay={menu} trigger={["click"]}>
-                <Button>
-                  Actions <DownOutlined />
-                </Button>
-              </Dropdown>
-            ) : (
-              <Button
-                style={{ background: "#ff4d4f", color: "white" }}
-                type="primary"
-                disabled={true}
-              >
-                Rejected
-              </Button>
-            )}
-          </Dropdown>
-        );
-      },
-    },
-  ];
-
   const filteredRequest = request.filter((item) =>
     item.templateName?.toLowerCase().includes(search.toLowerCase())
   );
 
-  const fetchRequest = async () => {
-    try {
-      setLoading(true);
-      const response = await requestClient.getRequest();
-      setRequest(Array.isArray(response.data) ? response.data : []);
-    } catch (error) {
-      console.error("Error fetching requests:", error);
-      message.error("Failed to fetch requests");
-      setRequest([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-  const fetchUploadedSignatures = async (record: any) => {
-    try {
-      const response = await signClient.getSign(session);
-      const images = Array.isArray(response)
-        ? response.map((item: any) => ({
-          id: item.id,
-          url: item.url,
-        }))
-        : [];
-      setSignatureImages(images);
-      setSelectedRequest(record);
-    } catch (error) {
-      console.error("Error fetching signatures:", error);
-      message.error("Failed to load signatures");
-      setSignatureImages([]);
-    }
-  };
+  const fetchRequest = () => {
+  fetchRequestData(setRequest, setLoading);
+};
 
+  const fetchUploadedSignatures = (record: any) => {
+  fetchUploadedSignaturesUtil(session, setSignatureImages, setSelectedRequest, record);
+};
+
+const columns = getColumns(userRole, navigate, fetchRequest, {
+  handleSend,
+  handleDelegate,
+  handleReject,
+  fetchUploadedSignatures,
+  setIsSignatureModalOpen,
+  setSelectedRequest,
+});
   useEffect(() => {
-    const getOfficers = async () => {
-      try {
-        const response = await courtClient.getOfficers();
-        const loggedInOfficerId = session;
-        const filteredOfficers = Array.isArray(response)
-          ? response.filter((officer) => officer.id !== loggedInOfficerId)
-          : [];
-        setOfficers(filteredOfficers);
-      } catch (error) {
-        console.error("Error fetching officers:", error);
-        setOfficers([]);
-      }
-    };
+    const fetchOfficers = async () => {
+      if (!session) return; 
+    const filteredOfficers = await getOfficersList(session!);
+    setOfficers(filteredOfficers);
+  };
 
-    getOfficers();
-    fetchRequest();
+  fetchOfficers();
+  fetchRequest();
   }, []);
   useEffect(() => {
     socket.on("inProcessing", (receivedRecordId: string) => {
